@@ -30,13 +30,13 @@ module "rds" {
   
   cluster_name = "lemur-db"
   instances = ""
-  realm = var.realm
-  security_group_names  = "default"
-  vpc_id = var.vps_id
+  realm = ""
+  security_group_names  = "default-closed"
+  vpc_id = "vpc-99b0e4fd"
 }
 
 module "db" {
-  source = "app.terraform.io/twilio-main/rds/aws"
+  source = "app.terraform.io/twilio-main/rds/aws/"
 
   identifier = local.name
 
@@ -45,7 +45,7 @@ module "db" {
   engine_version       = "14"
   family               = "postgres14" # DB parameter group
   major_engine_version = "14"         # DB option group
-  instance_class       = "db.t4g.large"
+  instance_class       = "c5.large"
 
   allocated_storage     = 20
   max_allocated_storage = 100
@@ -59,7 +59,10 @@ module "db" {
 
   multi_az               = true
   db_subnet_group_name   = module.vpc.database_subnet_group
-  vpc_security_group_ids = [module.security_group.security_group_id]
+  vpc_security_group_ids = ["sg-0fa089b76ba182e80"]
+
+  create_db_subnet_group = true
+  subnet_ids             = ["subnet-0b2fe42e809e90832"]
 
   maintenance_window              = "Mon:00:00-Mon:03:00"
   backup_window                   = "03:00-06:00"
@@ -96,130 +99,4 @@ module "db" {
   db_parameter_group_tags = {
     "Sensitive" = "low"
   }
-}
-
-module "db_default" {
-  source = "app.terraform.io/twilio-main/rds/aws"
-
-  identifier                     = "${local.name}-default"
-  instance_use_identifier_prefix = true
-
-  create_db_option_group    = false
-  create_db_parameter_group = false
-
-  # All available versions: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html#PostgreSQL.Concepts
-  engine               = "postgres"
-  engine_version       = "14"
-  family               = "postgres14" # DB parameter group
-  major_engine_version = "14"         # DB option group
-  instance_class       = "db.t4g.large"
-
-  allocated_storage = 20
-
-  # NOTE: Do NOT use 'user' as the value for 'username' as it throws:
-  # "Error creating DB Instance: InvalidParameterValue: MasterUsername
-  # user cannot be used as it is a reserved word used by the engine"
-  db_name  = "lemur"
-  username = "lemur"
-  port     = 5432
-
-  db_subnet_group_name   = module.vpc.database_subnet_group
-  vpc_security_group_ids = [module.security_group.security_group_id]
-
-  maintenance_window      = "Mon:00:00-Mon:03:00"
-  backup_window           = "03:00-06:00"
-  backup_retention_period = 0
-
-  tags = local.tags
-}
-
-module "db_disabled" {
-  source = "app.terraform.io/twilio-main/rds/aws"
-
-  identifier = "${local.name}-disabled"
-
-  create_db_instance        = false
-  create_db_parameter_group = false
-  create_db_option_group    = false
-}
-
-################################################################################
-# RDS Automated Backups Replication Module
-################################################################################
-
-provider "aws" {
-  alias  = "region2"
-  region = local.region2
-}
-
-module "kms" {
-  source      = "terraform-aws-modules/kms/aws"
-  version     = "~> 1.0"
-  description = "KMS key for cross region automated backups replication"
-
-  # Aliases
-  aliases                 = [local.name]
-  aliases_use_name_prefix = true
-
-  key_owners = [data.aws_caller_identity.current.arn]
-
-  tags = local.tags
-
-  providers = {
-    aws = aws.region2
-  }
-}
-
-module "db_automated_backups_replication" {
-  source = "../../modules/db_instance_automated_backups_replication"
-
-  source_db_instance_arn = module.db.db_instance_arn
-  kms_key_arn            = module.kms.key_arn
-
-  providers = {
-    aws = aws.region2
-  }
-}
-
-################################################################################
-# Supporting Resources
-################################################################################
-
-module "vpc" {
-  source  = "terraform-aws-modules/vpc/aws"
-  version = "~> 5.0"
-
-  name = local.name
-  cidr = local.vpc_cidr
-
-  azs              = local.azs
-  public_subnets   = [for k, v in local.azs : cidrsubnet(local.vpc_cidr, 8, k)]
-  private_subnets  = [for k, v in local.azs : cidrsubnet(local.vpc_cidr, 8, k + 3)]
-  database_subnets = [for k, v in local.azs : cidrsubnet(local.vpc_cidr, 8, k + 6)]
-
-  create_database_subnet_group = true
-
-  tags = local.tags
-}
-
-module "security_group" {
-  source  = "terraform-aws-modules/security-group/aws"
-  version = "~> 5.0"
-
-  name        = local.name
-  description = "Complete PostgreSQL example security group"
-  vpc_id      = module.vpc.vpc_id
-
-  # ingress
-  ingress_with_cidr_blocks = [
-    {
-      from_port   = 5432
-      to_port     = 5432
-      protocol    = "tcp"
-      description = "PostgreSQL access from within VPC"
-      cidr_blocks = module.vpc.vpc_cidr_block
-    },
-  ]
-
-  tags = local.tags
 }
